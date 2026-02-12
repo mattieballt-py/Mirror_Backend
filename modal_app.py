@@ -53,8 +53,13 @@ class SplatTrainerGPU:
         return self.trainer.export_splat()
     
     @modal.method()
+    def export_final(self) -> dict:
+        """Export final model and mark training complete"""
+        return self.trainer.export_final()
+    
+    @modal.method()
     def get_status(self) -> dict:
-        """Get training status"""
+        """Get training status including R2 chunks"""
         return self.trainer.get_status()
     
     @modal.method()

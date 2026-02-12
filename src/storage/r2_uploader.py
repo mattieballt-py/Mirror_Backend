@@ -1,9 +1,10 @@
 """
-R2/S3 Storage Handler for uploading PLY files
+R2/S3 Storage Handler for uploading PLY files and status tracking
 """
 import boto3
 import os
-from typing import Optional
+import json
+from typing import Optional, Dict
 
 
 class R2Uploader:
@@ -15,6 +16,7 @@ class R2Uploader:
         access_key_id: Optional[str] = None,
         secret_access_key: Optional[str] = None,
         endpoint_url: Optional[str] = None,
+        public_url: Optional[str] = None,
     ):
         """
         Initialize R2/S3 uploader.
@@ -24,8 +26,10 @@ class R2Uploader:
             access_key_id: AWS/R2 access key (or from env: AWS_ACCESS_KEY_ID)
             secret_access_key: AWS/R2 secret key (or from env: AWS_SECRET_ACCESS_KEY)
             endpoint_url: R2 endpoint (e.g., https://xxx.r2.cloudflarestorage.com)
+            public_url: Public R2 URL (e.g., https://pub-xxx.r2.dev)
         """
         self.bucket_name = bucket_name
+        self.public_url = public_url or os.getenv('R2_PUBLIC_URL')
         
         # Use provided credentials or environment variables
         access_key_id = access_key_id or os.getenv('AWS_ACCESS_KEY_ID')
@@ -55,7 +59,7 @@ class R2Uploader:
             content_type: MIME type
             
         Returns:
-            S3 URL of uploaded file
+            Public HTTPS URL of uploaded file (or S3 URL if no public_url set)
         """
         try:
             self.s3_client.put_object(
@@ -65,9 +69,13 @@ class R2Uploader:
                 ContentType=content_type,
             )
             
-            # Construct S3 URL
-            s3_url = f"s3://{self.bucket_name}/{file_name}"
-            return s3_url
+            # Construct public URL if available, otherwise fall back to S3 URL
+            if self.public_url:
+                public_url = f"{self.public_url}/{file_name}"
+                return public_url
+            else:
+                s3_url = f"s3://{self.bucket_name}/{file_name}"
+                return s3_url
             
         except Exception as e:
             print(f"Error uploading to R2/S3: {e}")
@@ -139,3 +147,31 @@ class R2Uploader:
         except Exception as e:
             print(f"Error deleting file: {e}")
             return False
+    
+    def upload_status(self, status: Dict) -> str:
+        """
+        Upload status.json to R2 for React to poll.
+        
+        Args:
+            status: Dict with keys 'progress' (0-1), 'chunks' (list), 'complete' (bool)
+            
+        Returns:
+            Public HTTPS URL of status.json
+        """
+        try:
+            status_bytes = json.dumps(status).encode('utf-8')
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key='status.json',
+                Body=status_bytes,
+                ContentType='application/json',
+            )
+            
+            if self.public_url:
+                return f"{self.public_url}/status.json"
+            else:
+                return f"s3://{self.bucket_name}/status.json"
+                
+        except Exception as e:
+            print(f"Error uploading status.json to R2: {e}")
+            raise
