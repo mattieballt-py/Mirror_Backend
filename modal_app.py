@@ -18,6 +18,7 @@ image = (
         "boto3",
         "plyfile",
     )
+    .add_local_python_source("modal_functions", "src")
 )
 
 # Import the Modal class after image is defined
@@ -31,8 +32,8 @@ app = modal.App("so100-live-splat")
 @app.cls(
     image=image,
     gpu="A100",  # Using A100 GPU for training
-    keep_warm=1,  # Keep 1 instance warm between calls
-    concurrency_limit=1,  # Only 1 concurrent request
+    min_containers=1,  # Keep 1 instance warm between calls
+    max_containers=1,  # Only 1 container instance
 )
 class SplatTrainerGPU:
     """GPU-accelerated Gaussian Splat trainer"""
