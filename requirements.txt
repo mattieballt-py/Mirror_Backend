@@ -1,0 +1,6 @@
+torch>=2.0.0
+gsplat>=0.1.0
+numpy
+opencv-python
+modal
+boto3
