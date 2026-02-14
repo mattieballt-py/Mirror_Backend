@@ -41,7 +41,7 @@ class GaussianModel(nn.Module):
         self.register_parameter(
             'opacities',
             nn.Parameter(
-                torch.ones(num_gaussians, 1) * 0.5,
+                torch.ones(num_gaussians) * 0.5,
                 requires_grad=True
             )
         )
