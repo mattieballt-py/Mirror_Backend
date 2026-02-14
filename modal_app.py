@@ -34,7 +34,17 @@ current_joint_angles = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 
 # GPU-based trainer class
-@app.cls(image=image, gpu="A100", timeout=3600)
+@app.cls(
+    image=image, 
+    gpu="A100", 
+    timeout=3600,
+    secrets=[modal.Secret.from_dict({
+        "CF_R2_KEY": "3fc30c66cf3b5e0f99bc48d13e67ea14",
+        "CF_R2_SECRET": "e4e8ecced9e81e6464b6b811a0fc5d713d8c3023aa0b0799d4ec7b19f89a35d3",
+        "CF_R2_ENDPOINT": "https://225d6b271578fbbf68da8d2044e5cff4.r2.cloudflarestorage.com",
+        "R2_BUCKET_NAME": "gsplat-scenes",
+    })]
+)
 class SplatTrainerContainer:
     """GPU container for Gaussian Splat training"""
     
