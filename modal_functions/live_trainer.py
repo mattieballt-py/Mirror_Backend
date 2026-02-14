@@ -82,8 +82,11 @@ class LiveSplatTrainer:
             self.frame_count += 1
             self.training_active = True
             
+            print(f"✓ Frame {self.frame_count} added to training")
+            
             # Check if it's time to export a chunk
             if self.frame_count % self.frames_per_chunk == 0:
+                print(f"→ Exporting chunk at frame {self.frame_count}")
                 self._export_and_upload_chunk()
             
             return {
@@ -122,6 +125,11 @@ class LiveSplatTrainer:
         """
         try:
             ply_bytes = self.trainer.to_ply_bytes()
+            
+            if not ply_bytes or len(ply_bytes) == 0:
+                print(f"Warning: PLY export returned empty bytes, skipping upload")
+                return
+            
             chunk_name = f"splat_{self.chunk_count:03d}.ply"
             
             # Upload chunk to R2
@@ -139,10 +147,12 @@ class LiveSplatTrainer:
                 "gaussian_count": self.trainer.get_gaussian_count(),
             }
             self.uploader.upload_status(status)
-            print(f"Uploaded chunk {chunk_name}, progress: {progress:.1%}")
+            print(f"✓ Uploaded chunk {chunk_name} ({len(ply_bytes)} bytes), progress: {progress:.1%}")
             
         except Exception as e:
-            print(f"Error exporting/uploading chunk: {e}")
+            print(f"✗ Error exporting/uploading chunk: {e}")
+            import traceback
+            traceback.print_exc()
     
     @modal.method()
     def export_final(self) -> Dict[str, any]:
@@ -155,6 +165,15 @@ class LiveSplatTrainer:
         try:
             # Export final chunk
             ply_bytes = self.trainer.to_ply_bytes()
+            
+            if not ply_bytes or len(ply_bytes) == 0:
+                print(f"Warning: Final PLY export returned empty bytes")
+                return {
+                    "success": False,
+                    "error": "PLY export returned empty bytes",
+                    "frame_count": self.frame_count,
+                }
+            
             chunk_name = f"splat_{self.chunk_count:03d}.ply"
             url = self.uploader.upload_ply(ply_bytes, chunk_name)
             self.uploaded_chunks.append(chunk_name)
@@ -169,6 +188,8 @@ class LiveSplatTrainer:
             }
             self.uploader.upload_status(status)
             
+            print(f"✓ Final chunk {chunk_name} uploaded ({len(ply_bytes)} bytes)")
+            
             return {
                 "success": True,
                 "message": "Training complete",
@@ -176,6 +197,9 @@ class LiveSplatTrainer:
                 "frame_count": self.frame_count,
             }
         except Exception as e:
+            print(f"✗ Error finalizing: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 "success": False,
                 "error": str(e),

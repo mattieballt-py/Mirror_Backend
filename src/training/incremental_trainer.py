@@ -66,7 +66,8 @@ class IncrementalGaussianSplat:
         
         # Refine every 10 frames
         if len(self.frames) % 10 == 0:
-            self._refine(iterations=100)
+            loss = self._refine(iterations=100)
+            print(f"✓ Training iteration complete: {len(self.frames)} frames, avg loss: {loss:.6f}")
     
     def _refine(self, iterations: int = 100) -> float:
         """
@@ -95,22 +96,31 @@ class IncrementalGaussianSplat:
             # Get Gaussian parameters
             params = self.gaussians.get_all_params()
             
+            # Prepare batched inputs for gsplat 1.x
+            viewmats = pose.unsqueeze(0)  # (1, 4, 4)
+            Ks = self.K.unsqueeze(0)  # (1, 3, 3)
+            
             try:
-                # Use gsplat's rasterization
-                rendered = rasterization(
+                # Use gsplat 1.x rasterization API
+                rendered_colors, alphas, info = rasterization(
                     means=params['means'],
                     quats=params['quats'],
                     scales=params['scales'],
                     opacities=params['opacities'],
                     colors=params['colors'],
-                    viewmat=pose,
-                    K=self.K,
+                    viewmats=viewmats,
+                    Ks=Ks,
                     width=image.shape[1],
                     height=image.shape[0],
+                    near_plane=0.01,
+                    far_plane=100.0,
                 )
                 
+                # Extract single image from batch (shape: (1, H, W, 3) -> (H, W, 3))
+                rendered = rendered_colors[0]
+                
                 # Compute loss (MSE between rendered and ground truth)
-                loss = ((rendered[..., :3] - image) ** 2).mean()
+                loss = ((rendered - image) ** 2).mean()
                 total_loss += loss.item()
                 
                 # Backward pass
@@ -119,7 +129,9 @@ class IncrementalGaussianSplat:
                 self.optimizer.zero_grad()
                 
             except Exception as e:
-                print(f"Warning during rasterization: {e}")
+                print(f"✗ Error during rasterization iteration {i}: {e}")
+                import traceback
+                traceback.print_exc()
                 self.optimizer.zero_grad()
                 continue
             
