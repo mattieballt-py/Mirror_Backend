@@ -192,7 +192,7 @@ class IncrementalGaussianSplat:
     
     def to_ply_bytes(self) -> bytes:
         """
-        Export Gaussian Splat as PLY format bytes.
+        Export Gaussian Splat as PLY format bytes in @mkkellogg/gaussian-splats-3d format.
         
         Returns:
             PLY file content as bytes
@@ -206,27 +206,77 @@ class IncrementalGaussianSplat:
         with torch.no_grad():
             params = self.gaussians.get_all_params()
         
-        # Detach from GPU
-        means = params['means'].cpu().numpy()
-        colors = (params['colors'].cpu().numpy() * 255).astype(np.uint8)
-        opacities = params['opacities'].cpu().numpy()
-        scales = params['scales'].cpu().numpy()
-        quats = params['quats'].cpu().numpy()
+        # Guard: Check if parameters have been trained
+        means = params['means'].detach().cpu().numpy()
+        if means.shape[0] == 0:
+            print("✗ Cannot export PLY: no Gaussian points")
+            return b""
         
-        # Create vertex data
-        vertex_data = np.array([
-            tuple(list(means[i]) + list(colors[i]) + [opacities[i]] +
-                  list(scales[i]) + list(quats[i]))
-            for i in range(len(means))
-        ],
-            dtype=[
-                ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-                ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),
-                ('alpha', 'f4'),
-                ('scale_x', 'f4'), ('scale_y', 'f4'), ('scale_z', 'f4'),
-                ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
-            ]
-        )
+        print(f"Exporting PLY: {means.shape[0]} gaussians")
+        
+        # Detach all parameters from GPU
+        colors = params['colors'].detach().cpu().numpy()  # (N, 3) in [0, 1]
+        opacities = params['opacities'].detach().cpu().numpy()  # (N,)
+        scales = params['scales'].detach().cpu().numpy()  # (N, 3) log-scale
+        quats = params['quats'].detach().cpu().numpy()  # (N, 4)
+        
+        # Convert RGB colors to spherical harmonics DC coefficients
+        # SH_C0 = 0.28209479177387814 (0th order SH coefficient)
+        SH_C0 = 0.28209479177387814
+        f_dc = (colors - 0.5) / SH_C0  # (N, 3)
+        
+        # Convert opacity to pre-sigmoid (inverse sigmoid)
+        # If opacity is already in [0, 1], convert to logit space
+        # logit(x) = log(x / (1 - x))
+        opacities_clamped = np.clip(opacities, 1e-6, 1 - 1e-6)
+        opacities_logit = np.log(opacities_clamped / (1 - opacities_clamped))
+        
+        # Normalize quaternions
+        quats_norm = quats / (np.linalg.norm(quats, axis=1, keepdims=True) + 1e-8)
+        
+        num_points = means.shape[0]
+        
+        # Build vertex data with proper @mkkellogg/gaussian-splats-3d format
+        # Position (x, y, z), normals (nx, ny, nz), SH DC (f_dc_0, f_dc_1, f_dc_2),
+        # 45 higher-order SH coefficients (f_rest_0 ... f_rest_44),
+        # opacity, scale (scale_0, scale_1, scale_2), rotation (rot_0, rot_1, rot_2, rot_3)
+        
+        dtype_full = [
+            ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+            ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
+        ]
+        # Add 45 higher-order SH coefficients (for 3 channels, 15 coefficients each)
+        for i in range(45):
+            dtype_full.append((f'f_rest_{i}', 'f4'))
+        dtype_full.extend([
+            ('opacity', 'f4'),
+            ('scale_0', 'f4'), ('scale_1', 'f4'), ('scale_2', 'f4'),
+            ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
+        ])
+        
+        # Build structured array
+        vertex_data = np.zeros(num_points, dtype=dtype_full)
+        vertex_data['x'] = means[:, 0]
+        vertex_data['y'] = means[:, 1]
+        vertex_data['z'] = means[:, 2]
+        vertex_data['nx'] = 0.0
+        vertex_data['ny'] = 0.0
+        vertex_data['nz'] = 0.0
+        vertex_data['f_dc_0'] = f_dc[:, 0]
+        vertex_data['f_dc_1'] = f_dc[:, 1]
+        vertex_data['f_dc_2'] = f_dc[:, 2]
+        # Higher-order SH coefficients set to 0
+        for i in range(45):
+            vertex_data[f'f_rest_{i}'] = 0.0
+        vertex_data['opacity'] = opacities_logit
+        vertex_data['scale_0'] = scales[:, 0]
+        vertex_data['scale_1'] = scales[:, 1]
+        vertex_data['scale_2'] = scales[:, 2]
+        vertex_data['rot_0'] = quats_norm[:, 0]
+        vertex_data['rot_1'] = quats_norm[:, 1]
+        vertex_data['rot_2'] = quats_norm[:, 2]
+        vertex_data['rot_3'] = quats_norm[:, 3]
         
         # Create PLY element
         vertex_el = PlyElement.describe(vertex_data, 'vertex')
@@ -236,7 +286,10 @@ class IncrementalGaussianSplat:
         import io
         output = io.BytesIO()
         ply_data.write(output)
-        return output.getvalue()
+        ply_bytes = output.getvalue()
+        
+        print(f"✓ PLY export complete: {len(ply_bytes)} bytes ({len(ply_bytes) / 1024 / 1024:.2f} MB)")
+        return ply_bytes
     
     def get_gaussian_count(self) -> int:
         """Return current number of Gaussians"""
@@ -254,12 +307,22 @@ class IncrementalGaussianSplat:
             return
         
         try:
+            # Guard: Check if we have enough frames for training
+            if len(self.frames) == 0:
+                print(f"✗ No frames available for export at frame {frame_idx}")
+                return
+            
             # Export PLY bytes
             ply_bytes = self.to_ply_bytes()
             
             if not ply_bytes or len(ply_bytes) == 0:
                 print(f"✗ PLY export returned empty bytes at frame {frame_idx}")
                 return
+            
+            # Validate file size
+            size_kb = len(ply_bytes) / 1024
+            if size_kb < 100:
+                print(f"⚠️  WARNING: PLY suspiciously small: {len(ply_bytes)} bytes ({size_kb:.1f} KB) — may be empty or untrained")
             
             # Create chunk filename
             chunk_filename = f"splat_{self.chunk_count:03d}.ply"
