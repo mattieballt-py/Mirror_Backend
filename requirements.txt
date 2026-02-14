@@ -1,7 +1,9 @@
 torch>=2.0.0
 gsplat>=0.1.0
 numpy
-opencv-python
+opencv-python-headless
 modal>=1.0.0
 boto3
 plyfile
+fastapi
+uvicorn
